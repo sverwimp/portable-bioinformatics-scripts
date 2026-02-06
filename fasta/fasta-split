@@ -1,0 +1,349 @@
+#!/usr/bin/env python3
+
+import argparse
+import bz2
+import gzip
+import os
+import sys
+import re
+from pathlib import Path
+from typing import Generator
+
+
+def is_gzipped(path: str) -> bool:
+    """Check if file is gzip compressed."""
+    with open(path, "rb") as f:
+        return f.read(2) == b"\x1f\x8b"
+
+
+def is_bzipped(path: str) -> bool:
+    """Check if file is bzip2 compressed."""
+    with open(path, "rb") as f:
+        return f.read(3) == b"BZh"
+
+
+def open_file(path: str, mode: str = "rt"):
+    """Open file with appropriate decompression if needed."""
+    if is_gzipped(path):
+        return gzip.open(path, mode)
+    elif is_bzipped(path):
+        return bz2.open(path, mode)
+    return open(path, mode)
+
+
+def write_fasta(header: str, sequence: str, width: int = 60) -> str:
+    """Format FASTA entry with line wrapping."""
+    lines = [f">{header}"]
+    for i in range(0, len(sequence), width):
+        lines.append(sequence[i:i+width])
+    return "\n".join(lines) + "\n"
+
+
+def clean_sequence_id(header: str) -> str:
+    """Extract clean sequence ID from header for filename."""
+    header = header.lstrip('>')
+    seq_id = header.split()[0] if header else "sequence"
+    # Remove characters that are problematic in filenames
+    seq_id = re.sub(r'[^\w\-\.]', '_', seq_id)
+    return seq_id
+
+
+def parse_size(size_str: str) -> int:
+    """Parse size string like '100MB', '1.5GB' to bytes."""
+    size_str = size_str.upper().strip()
+    
+    multipliers = {
+        'KB': 1024,
+        'K': 1024,
+        'MB': 1024 * 1024,
+        'M': 1024 * 1024,
+        'GB': 1024 * 1024 * 1024,
+        'G': 1024 * 1024 * 1024,
+    }
+    
+    match = re.match(r'^([\d.]+)\s*([KMGB]+)$', size_str)
+    if not match:
+        raise ValueError(f"Invalid size format: {size_str}")
+    
+    number, unit = match.groups()
+    
+    if unit not in multipliers:
+        raise ValueError(f"Unknown size unit: {unit}")
+    
+    return int(float(number) * multipliers[unit])
+
+
+def check_output_files(output_files: str, force: bool):
+    """Check if any output files already exist."""
+    existing = [f for f in output_files if os.path.exists(f)]
+    
+    if existing and not force:
+        print(f"Error: Output files already exist:", file=sys.stderr)
+        for f in existing[:5]:  # Show first 5
+            print(f"  {f}", file=sys.stderr)
+        if len(existing) > 5:
+            print(f"  ... and {len(existing) - 5} more", file=sys.stderr)
+        print("\nUse --force to overwrite existing files.", file=sys.stderr)
+        sys.exit(1)
+
+
+def read_fasta_entries(filepath: str) -> Generator:
+    """Generator that yields (header, sequence) tuples."""
+    header = None
+    sequence = []
+    
+    with open_file(filepath, "rt") as f:
+        for line in f:
+            line = line.rstrip()
+            if line.startswith(">"):
+                if header:
+                    yield (header, "".join(sequence))
+                header = line[1:].strip()
+                sequence = []
+            else:
+                sequence.append(line.strip().upper())
+        
+        if header:
+            yield (header, "".join(sequence))
+
+
+def split_by_count(filepath: str, n: int, output_dir: str, force: bool, width: int):
+    """Split FASTA file every N sequences."""
+    base_name = Path(filepath).stem
+    if base_name.endswith('.fa') or base_name.endswith('.fasta'):
+        base_name = Path(base_name).stem
+    
+    # First pass: count total entries and determine output files
+    total_entries = sum(1 for _ in read_fasta_entries(filepath))
+    num_files = (total_entries + n - 1) // n  # Ceiling division
+    
+    output_files = [
+        os.path.join(output_dir, f"{base_name}_{i+1:03d}.fa")
+        for i in range(num_files)
+    ]
+    
+    check_output_files(output_files, force)
+    
+    # Second pass: write files
+    file_idx = 0
+    count = 0
+    current_file = None
+    
+    for header, sequence in read_fasta_entries(filepath):
+        if count % n == 0:
+            if current_file:
+                current_file.close()
+            current_file = open(output_files[file_idx], 'w')
+            file_idx += 1
+        
+        current_file.write(write_fasta(header, sequence, width))
+        count += 1
+    
+    if current_file:
+        current_file.close()
+    
+    print(f"Split {total_entries} sequences into {num_files} files ({n} sequences each)")
+
+
+def split_into_parts(filepath: str, parts: int, output_dir: str, force: bool, width: int):
+    """Split FASTA file into P equal parts."""
+    base_name = Path(filepath).stem
+    if base_name.endswith('.fa') or base_name.endswith('.fasta'):
+        base_name = Path(base_name).stem
+    
+    # First pass: count total entries
+    total_entries = sum(1 for _ in read_fasta_entries(filepath))
+    
+    if parts > total_entries:
+        print(f"Warning: Requested {parts} parts but only {total_entries} sequences available", 
+              file=sys.stderr)
+        parts = total_entries
+    
+    sequences_per_part = (total_entries + parts - 1) // parts
+    
+    output_files = [
+        os.path.join(output_dir, f"{base_name}_part{i+1}.fa")
+        for i in range(parts)
+    ]
+    
+    check_output_files(output_files, force)
+    
+    # Second pass: write files
+    file_idx = 0
+    count = 0
+    current_file = open(output_files[file_idx], 'w')
+    
+    for header, sequence in read_fasta_entries(filepath):
+        if count > 0 and count % sequences_per_part == 0 and file_idx < parts - 1:
+            current_file.close()
+            file_idx += 1
+            current_file = open(output_files[file_idx], 'w')
+        
+        current_file.write(write_fasta(header, sequence, width))
+        count += 1
+    
+    current_file.close()
+    
+    print(f"Split {total_entries} sequences into {parts} parts (~{sequences_per_part} sequences each)")
+
+
+def split_single(filepath: str, output_dir: str, force: bool, width: int):
+    """Split FASTA file into one file per sequence."""
+    # First pass: determine output files and check for conflicts
+    output_files = []
+    seen_ids = {}
+    
+    for header, _ in read_fasta_entries(filepath):
+        seq_id = clean_sequence_id(header)
+        
+        # Handle duplicate IDs
+        if seq_id in seen_ids:
+            seen_ids[seq_id] += 1
+            seq_id = f"{seq_id}_{seen_ids[seq_id]}"
+        else:
+            seen_ids[seq_id] = 1
+        
+        output_file = os.path.join(output_dir, f"{seq_id}.fa")
+        output_files.append(output_file)
+    
+    check_output_files(output_files, force)
+    
+    # Second pass: write files
+    file_idx = 0
+    for header, sequence in read_fasta_entries(filepath):
+        with open(output_files[file_idx], 'w') as f:
+            f.write(write_fasta(header, sequence, width))
+        file_idx += 1
+    
+    print(f"Split {len(output_files)} sequences into individual files")
+
+
+def split_by_size(filepath: str, max_size: int, output_dir: str, force: bool, width: int):
+    """Split FASTA file to keep files under max_size bytes."""
+    base_name = Path(filepath).stem
+    if base_name.endswith('.fa') or base_name.endswith('.fasta'):
+        base_name = Path(base_name).stem
+    
+    # We need to create files on-the-fly since we don't know how many
+    file_idx = 1
+    current_size = 0
+    current_file = None
+    output_files = []
+    total_sequences = 0
+    
+    for header, sequence in read_fasta_entries(filepath):
+        entry_text = write_fasta(header, sequence, width)
+        entry_size = len(entry_text.encode('utf-8'))
+        
+        # Check if we need a new file
+        if current_file is None or (current_size + entry_size > max_size and current_size > 0):
+            if current_file:
+                current_file.close()
+            
+            output_file = os.path.join(output_dir, f"{base_name}_{file_idx:03d}.fa")
+            
+            # Check if file exists
+            if os.path.exists(output_file) and not force:
+                print(f"Error: Output file already exists: {output_file}", file=sys.stderr)
+                print("Use --force to overwrite existing files.", file=sys.stderr)
+                
+                for f in output_files:
+                    if os.path.exists(f):
+                        os.remove(f)
+                sys.exit(1)
+            
+            current_file = open(output_file, 'w')
+            output_files.append(output_file)
+            current_size = 0
+            file_idx += 1
+        
+        current_file.write(entry_text)
+        current_size += entry_size
+        total_sequences += 1
+    
+    if current_file:
+        current_file.close()
+    
+    print(f"Split {total_sequences} sequences into {len(output_files)} files (max {max_size:,} bytes each)")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Split FASTA files by sequence count, parts, or size",
+        formatter_class=argparse.RawTextHelpFormatter
+    )
+    
+    parser.add_argument(
+        "fasta",
+        help="Input FASTA file (can be gzipped or bzipped)"
+    )
+    
+    # Mutually exclusive splitting modes
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument(
+        "-n", "--count",
+        type=int,
+        metavar="N",
+        help="Split every N sequences"
+    )
+    group.add_argument(
+        "-p", "--parts",
+        type=int,
+        metavar="P",
+        help="Split into P equal parts"
+    )
+    group.add_argument(
+        "-s", "--single",
+        action="store_true",
+        help="One file per sequence (named by sequence header ID)"
+    )
+    group.add_argument(
+        "-b", "--size",
+        metavar="SIZE",
+        help="Split by size (e.g., '100MB', '1.5GB', '500KB')"
+    )
+    
+    parser.add_argument(
+        "-o", "--output-dir",
+        default=".",
+        help="Output directory (default: current directory)"
+    )
+    parser.add_argument(
+        "-w", "--width",
+        type=int,
+        default=60,
+        help="Line width for FASTA output (default: 60)"
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite existing output files"
+    )
+    
+    args = parser.parse_args()
+    
+    if not os.path.exists(args.fasta):
+        print(f"Error: Input file not found: {args.fasta}", file=sys.stderr)
+        sys.exit(1)
+    
+    if args.output_dir != "." and not os.path.exists(args.output_dir):
+        os.makedirs(args.output_dir)
+    
+    try:
+        if args.count:
+            split_by_count(args.fasta, args.count, args.output_dir, args.force, args.width)
+        elif args.parts:
+            split_into_parts(args.fasta, args.parts, args.output_dir, args.force, args.width)
+        elif args.single:
+            split_single(args.fasta, args.output_dir, args.force, args.width)
+        elif args.size:
+            max_size = parse_size(args.size)
+            split_by_size(args.fasta, max_size, args.output_dir, args.force, args.width)
+    
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
