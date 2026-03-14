@@ -10,6 +10,8 @@ A personal collection of standalone, portable command-line utilities for bioinfo
 
 More information on each script given in the README file in each folder.
 
+---
+
 ## Installation
 
 ### **Option 1: Install all scripts**
@@ -40,7 +42,12 @@ Use `./install.sh -h` for more information
 
 ### **Option 2: Use individual scripts**
 
-Each script is self-contained. You can copy any single script directly and use it without installing the entire collection.
+Each script is self-contained. You can copy any single script directly and use it without installing the entire collection. 
+
+Scripts written in C can be compiled as followed:
+`gcc -O2 <scriptname>.c -o <scriptname> -lz`
+
+---
 
 ## Management
 
@@ -71,6 +78,8 @@ git pull
 
 Only modified or new scripts will be copied. Use `./install.sh -f` to force reinstall everything.
 
+---
+
 ## Requirements
 
-All scripts use either standard Unix tools (bash, awk, grep), Python, or C (requires zlib) and should work on Linux/macOS without additional dependencies.
+All scripts use either standard Unix tools (bash, awk, grep), Python, or C (requires gcc and zlib) and should work on Linux/macOS without additional dependencies.

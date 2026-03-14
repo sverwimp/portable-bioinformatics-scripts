@@ -16,7 +16,7 @@ gbk2fasta --protein genome.gbk --out genome.faa       # Amino acid output
 # Without --out, the output will print to the standard output
 gbk2fasta genome.gbk.gz | gzip > genome.fna.gz        # Compressed I/O
 ```
-
+---
 
 ### `prokkify`
 Create a Prokka-like GFF3 file with embedded FASTA sequence(s) from common genome annotation formats.
