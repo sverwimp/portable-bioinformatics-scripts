@@ -67,6 +67,30 @@ fasta-size --max-threshold 500 genome.fa
 
 **Options:** `--min` (smallest entry), `--max` (largest entry), `--threshold SIZE` (entries ≥ SIZE), `--max-threshold SIZE` (entries ≤ SIZE), `-o` (output file), `-w` (line width)
 
+
+### `fasta-split`
+Split FASTA files by sequence count, parts, or size.
+
+```bash
+# Split every 100 sequences
+fasta-split -n 100 genome.fa
+# Output: genome_001.fa, genome_002.fa, ...
+
+# Split into 4 equal parts
+fasta-split -p 4 genome.fa
+# Output: genome_part1.fa, genome_part2.fa, genome_part3.fa, genome_part4.fa
+```
+
+*Splitting modes (choose one):**
+- `-n N` (split every N sequences)
+- `-p P` (split into P equal parts)
+- `-s` (one file per sequence, named by sequence ID)
+- `-b SIZE` (split by file size: e.g., '100MB', '1.5GB', '500KB')
+
+**Options:** `-o DIR` (output directory, default: current), `-w N` (line width, default: 60), `--force` (overwrite existing files)
+
+
+
 ### `fasta-stats`
 Calculate comprehensive statistics for FASTA files.
 
